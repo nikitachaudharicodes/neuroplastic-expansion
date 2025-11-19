@@ -41,6 +41,7 @@ python train.py \
     --stl_actor \
     --stl_critic &
 
+wait
 echo "Running NE-SAC"
 # NE-SAC
 python train_sac.py \
