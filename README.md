@@ -18,8 +18,10 @@ gradients, (2) dormant neuron pruning to optimize network expressivity.
 ```
 .
 ├── stl/
-│   ├── train.py          # Main training script
-│   └── TD3.py           # TD3 algorithm implementation
+│   ├── train.py          # TD3 training script
+│   ├── TD3.py            # TD3 algorithm implementation
+│   ├── train_sac.py      # SAC training script
+│   └── SAC.py            # SAC algorithm implementation
 ├── NE/
 │   ├── STL_Scheduler.py # Small-to-Large Training scheduler
 │   └── utils.py         # Utility functions
@@ -120,6 +122,19 @@ python stl/train.py \
     --initial_stl_sparsity 0.8\
     --uni\
     --grad_accumulation_n 1  # Optional, defaults to 1 if not specified
+```
+
+### SAC with Neuroplastic Expansion
+
+```bash
+python stl/train_sac.py \
+    --env HalfCheetah-v4 \
+    --seed 0 \
+    --actor_sparsity 0.25 \
+    --critic_sparsity 0.25 \
+    --initial_stl_sparsity 0.8 \
+    --learnable_alpha \
+    --exp_id sac_baseline
 ```
 
 ## Key Parameters
