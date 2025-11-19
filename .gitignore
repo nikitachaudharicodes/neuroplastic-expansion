@@ -19,6 +19,10 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+stl/runs/
+stl/videos
+.DS_Store
+stl/results_eval
 
 # Virtual Environment
 venv/
