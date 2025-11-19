@@ -134,8 +134,13 @@ python stl/train_sac.py \
     --critic_sparsity 0.25 \
     --initial_stl_sparsity 0.8 \
     --learnable_alpha \
+    --auto_batch \
+    --recall \
+    --nstep 3 \
     --exp_id sac_baseline
 ```
+
+`train_sac.py` mirrors the TD3 script’s NE options (FAU-triggered auto-batching, replay recall, dynamic buffer management, n-step targets, STL scheduler settings, etc.), but swaps in a SAC policy/value update.
 
 ## Key Parameters
 

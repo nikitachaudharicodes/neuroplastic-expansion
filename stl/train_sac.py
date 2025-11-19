@@ -12,7 +12,6 @@ from NE.utils import ReplayBuffer, show_sparsity
 from SAC import SAC
 from torch.utils.tensorboard import SummaryWriter
 import json
-import torch.nn.functional as F
 from collections import deque
 import copy
 
@@ -47,6 +46,7 @@ def main():
 	parser.add_argument("--batch_size", default=256, type=int)
 	parser.add_argument("--discount", default=0.99)
 	parser.add_argument("--tau", default=0.005)
+	parser.add_argument("--Tamp", default=0.9, type=float)
 	parser.add_argument("--hidden_dim", default=256, type=int)
 	parser.add_argument("--static_actor", action='store_true', default=False)
 	parser.add_argument("--static_critic", action='store_true', default=False)
@@ -55,12 +55,18 @@ def main():
 	parser.add_argument("--initial_stl_sparsity", default=0.8, type=float)
 	parser.add_argument("--delta", default=100, type=int)
 	parser.add_argument("--zeta", default=0.5, type=float)
+	parser.add_argument("--awaken", default=0.4, type=float)
+	parser.add_argument("--recall", action='store_true', default=False)
+	parser.add_argument("--auto_batch", action='store_true', default=True)
+	parser.add_argument("--elastic", action='store_true', default=False)
 	parser.add_argument("--grad_accumulation_n", default=1, type=int)
 	parser.add_argument("--use_simple_metric", action='store_true', default=False)
 	parser.add_argument("--complex_prune", action='store_true', default=False)
 	parser.add_argument("--init_temperature", default=0.2, type=float, help="Initial entropy temperature (alpha)")
 	parser.add_argument("--learnable_alpha", action='store_true', default=True)
 	parser.add_argument("--alpha_lr", default=3e-4, type=float)
+	parser.add_argument("--nstep", default=1, type=int)
+	parser.add_argument("--delay_nstep", default=0, type=int)
 	parser.add_argument("--buffer_max_size", default=int(1e6), type=int)
 	parser.add_argument("--buffer_min_size", default=int(1e5), type=int)
 	parser.add_argument("--use_dynamic_buffer", action='store_true', default=False)
@@ -136,6 +142,8 @@ def main():
 	episode_reward = 0
 	episode_timesteps = 0
 	episode_num = 0
+	last_ac_fau = 0.0
+	last_cr_fau = 0.0
 
 	for t in range(int(args.max_timesteps)):
 		episode_timesteps += 1
@@ -163,7 +171,7 @@ def main():
 		episode_reward += reward
 
 		if t >= args.start_timesteps:
-			policy.train(replay_buffer, args.batch_size)
+			last_ac_fau, last_cr_fau = policy.train(replay_buffer, args.batch_size)
 
 		if done or truncated:
 			print(f"SAC Total T: {t+1} Episode Num: {episode_num+1} Episode T: {episode_timesteps} Reward: {episode_reward:.3f}")
@@ -178,6 +186,13 @@ def main():
 			eval_reward = eval_policy(policy, args.env, args.seed)
 			evaluations.append(eval_reward)
 			recent_eval.append(eval_reward)
+			writer.add_scalar('actor_FAU', last_ac_fau, t+1)
+			writer.add_scalar('critic_FAU', last_cr_fau, t+1)
+			writer.add_scalar('reward', eval_reward, t+1)
+			if args.actor_sparsity > 0:
+				writer.add_scalar('actor_sparsity', show_sparsity(policy.actor.state_dict(), to_print=False), t+1)
+			if args.critic_sparsity > 0:
+				writer.add_scalar('critic_sparsity', show_sparsity(policy.critic.state_dict(), to_print=False), t+1)
 			if eval_reward > best_eval:
 				best_eval = eval_reward
 				torch.save(policy.actor.state_dict(), model_dir+'actor')
