@@ -4,7 +4,9 @@ import sys
 sys.path.append(r'../')
 import numpy as np
 import torch
-import gym
+# import gym
+import gymnasium as gym
+
 #from dm_control import suite
 import argparse
 import os
@@ -21,16 +23,27 @@ import copy
 # Runs policy for X episodes and returns average reward
 # A fixed seed is used for the eval environment
 def eval_policy(policy, env_name, seed, eval_episodes=10):
+
+    # eval_env = gym.make(env_name, terminate_when_done=True)
     eval_env = gym.make(env_name)
-    eval_env.seed(seed + 100)
+
+    
+    #eval_env = gym.make(env_name)
+    # eval_env.seed(seed + 100)
     
     avg_reward = 0.
     for _ in range(eval_episodes):
-        state, done = eval_env.reset(), False
+        state, info = eval_env.reset(seed = seed + 100)
+        done = False
+        # state, done = eval_env.reset(), False
         while not done:
             action = policy.select_action(np.array(state))
-            state, reward, done, _ = eval_env.step(action)
+            #state, reward, done, _ = eval_env.step(action)
+            next_state, reward, terminated, truncated, info = eval_env.step(action)
+
+            done = terminated or truncated
             avg_reward += reward
+            state = next_state
     avg_reward /= eval_episodes
     print("---------------------------------------")
     print(f"Evaluation over {eval_episodes} episodes: {avg_reward:.3f}")
@@ -41,7 +54,8 @@ def eval_policy(policy, env_name, seed, eval_episodes=10):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--exp_id", default='exptest')                              # Experiment name
-    parser.add_argument("--env", default='HalfCheetah')                             # Environment
+    # parser.add_argument("--env", default='HalfCheetah')                             # Environment
+    parser.add_argument("--env", default='HalfCheetah-v4')  # Environment
     parser.add_argument("--seed", default=1, type=int)                              # Seed
     parser.add_argument("--start_timesteps", default=25e3, type=int)                # Time steps initial random policy is used
     parser.add_argument("--eval_freq", default=5e3, type=int)                       # How often (time steps) we evaluate
@@ -120,7 +134,9 @@ def main():
     env = gym.make(args.env)
 
     # Set seeds
-    env.seed(args.seed)
+    # env.seed(args.seed)
+    state, info = env.reset(seed=args.seed)
+
     env.action_space.seed(args.seed)
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -169,7 +185,8 @@ def main():
     recent_eval = deque(maxlen=20)
     best_eval = np.mean(evaluations)
 
-    state, done = env.reset(), False
+    # state, done = env.reset(), False
+    done = False
     episode_reward = 0
     episode_timesteps = 0
     episode_num = 0
@@ -194,12 +211,19 @@ def main():
             ).clip(-max_action, max_action)
 
         # Perform action
-        next_state, reward, done, _ = env.step(action) 
-        done_bool = float(done) if episode_timesteps < env._max_episode_steps else 0
+        # next_state, reward, done, _ = env.step(action) 
+        # done_bool = float(done) if episode_timesteps < env._max_episode_steps else 0
+
+        next_state, reward, terminated, truncated, info = env.step(action)
+        done = terminated or truncated
+        done_bool = float(done)
+
 
         # Store data in replay buffer
 
-        replay_buffer.add(state, action, next_state, reward, done_bool, action_mean, episode_timesteps >= env._max_episode_steps)
+        # replay_buffer.add(state, action, next_state, reward, done_bool, action_mean, episode_timesteps >= env._max_episode_steps)
+
+        replay_buffer.add(state, action, next_state, reward, done_bool, action_mean, truncated)
         if args.use_dynamic_buffer and (t+1) % args.buffer_adjustment_interval == 0:
             if replay_buffer.size == replay_buffer.max_size: 
                 ind = (replay_buffer.ptr + np.arange(8*args.batch_size)) % replay_buffer.max_size
@@ -230,10 +254,14 @@ def main():
             # +1 to account for 0 indexing. +0 on ep_timesteps since it will increment +1 even if done=True
             print(f"Total T: {t+1} Episode Num: {episode_num+1} Episode T: {episode_timesteps} Reward: {episode_reward:.3f}")
             # Reset environment
-            state, done = env.reset(), False
+            # state, done = env.reset(), False
+            state, info = env.reset()
+            done = False
             episode_reward = 0
             episode_timesteps = 0
             episode_num += 1 
+        
+
 
         # Evaluate episode
         if (t + 1) % args.eval_freq == 0:
@@ -257,6 +285,14 @@ def main():
                 if args.critic_sparsity > 0:
                     torch.save(policy.critic_pruner.state_dict, model_dir+'critic_pruner')
                     torch.save(policy.critic_pruner.backward_masks, model_dir+'critic_masks')
+                    
+    # Save final policy at the end of training
+    print("Saving final policy...")
+    torch.save(policy.actor.state_dict(), model_dir + "actor_final.pth")
+    torch.save(policy.critic.state_dict(), model_dir + "critic_final.pth")
+    print(f"Final policy saved to {model_dir}")
+
+    
     writer.close()
 
 if __name__ == "__main__":
