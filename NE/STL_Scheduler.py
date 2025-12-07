@@ -167,7 +167,9 @@ class STL_Scheduler:
         tau:float=0.0,
         init_method:str='zero',
         initial_stl_sparsity:float=0.8,
-        complex_prune:bool=False  # New parameter for target STL sparsity
+        complex_prune:bool=False,  # New parameter for target STL sparsity
+        use_grad_pruning:bool=False,      # ADD THIS
+        grad_prune_alpha:float=0.99
         ):
         # Initialize model and optimizer references
         self.model = model
@@ -181,7 +183,10 @@ class STL_Scheduler:
         self.use_simple_metric = use_simple_metric
         self.tau = tau
         self.init_method = init_method  # Store initialization method
-        
+        self.use_grad_pruning = use_grad_pruning
+        self.grad_prune_alpha = grad_prune_alpha  # For EMA
+        self.grad_accumulator = {}
+
         # Activation tracking
         self.activations = {}
         self.activation_hooks = []
@@ -431,6 +436,30 @@ class STL_Scheduler:
         """
         return 0.008
 
+    def track_gradients_for_pruning(self):
+        """Track gradient magnitudes for gradient-based pruning."""
+        if not self.use_grad_pruning:
+            return
+        
+        for l, w in enumerate(self.W):
+            if self.S[l] <= 0:  # Skip if layer isn't sparse
+                continue
+            
+            # Get gradient from backward hook
+            if hasattr(self.backward_hook_objects[l], 'dense_grad') and \
+            self.backward_hook_objects[l].dense_grad is not None:
+                
+                current_grad = torch.abs(self.backward_hook_objects[l].dense_grad)
+                
+                # Initialize or update EMA
+                if l not in self.grad_accumulator:
+                    self.grad_accumulator[l] = current_grad.clone()
+                else:
+                    self.grad_accumulator[l] = (
+                        self.grad_prune_alpha * self.grad_accumulator[l] + 
+                        (1 - self.grad_prune_alpha) * current_grad
+                    )
+
     def __call__(self, end_grow, state=None, action=None, ac_cr="actor"):
         """
         Main scheduler step function. Called after each training step.
@@ -501,7 +530,10 @@ class STL_Scheduler:
                 current_mask = self.backward_masks[l]
 
                 # Calculate importance scores for pruning and growing
-                if self.use_simple_metric:
+                if self.use_grad_pruning and l in self.grad_accumulator:
+                    # Use gradient magnitude for pruning
+                    score_drop = self.grad_accumulator[l]
+                elif self.use_simple_metric:
                     score_drop = torch.abs(w)
                 else:
                     # Use ReDo-style pruning with dormant neuron detection

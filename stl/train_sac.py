@@ -72,6 +72,10 @@ def main():
 	parser.add_argument("--use_dynamic_buffer", action='store_true', default=False)
 	parser.add_argument("--buffer_threshold", default=0.2, type=float)
 	parser.add_argument("--buffer_adjustment_interval", default=int(1e4), type=int)
+
+	parser.add_argument("--grad_pruning", action='store_true', default=False)
+	parser.add_argument("--grad_prune_alpha", default=0.99, type=float)
+
 	args = parser.parse_args()
 
 	args.T_end = (args.max_timesteps - args.start_timesteps)

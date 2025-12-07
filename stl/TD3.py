@@ -62,18 +62,24 @@ class TD3(object):
 											grad_accumulation_n=args.grad_accumulation_n,
 											use_simple_metric=args.use_simple_metric,
 											initial_stl_sparsity=args.initial_stl_sparsity,
-											complex_prune=args.complex_prune)
+											complex_prune=args.complex_prune,
+											use_grad_pruning=args.grad_pruning,
+                                			grad_prune_alpha=args.grad_prune_alpha
+											)
 			self.targer_actor_W, _ = get_W(self.actor_target)
 		else:
 			self.actor_pruner = lambda: True
 		if self.sparse_critic: # Sparsify the critic at initialization
 			self.critic_pruner = STL_Scheduler(self.critic, self.critic_optimizer, 
-											 static_topo=args.static_critic, sparsity=args.critic_sparsity,
-											 T_end=args.T_end, delta=args.delta, zeta=args.zeta,
-											 grad_accumulation_n=args.grad_accumulation_n,
-											 use_simple_metric=args.use_simple_metric,
-											 initial_stl_sparsity=args.initial_stl_sparsity,
-											 complex_prune=args.complex_prune)
+											static_topo=args.static_critic, sparsity=args.critic_sparsity,
+											T_end=args.T_end, delta=args.delta, zeta=args.zeta,
+											grad_accumulation_n=args.grad_accumulation_n,
+											use_simple_metric=args.use_simple_metric,
+											initial_stl_sparsity=args.initial_stl_sparsity,
+											complex_prune=args.complex_prune,
+											use_grad_pruning=args.grad_pruning,
+                                			grad_prune_alpha=args.grad_prune_alpha
+											)
 			self.targer_critic_W, _ = get_W(self.critic_target)
 		else:
 			self.critic_pruner = lambda: True
@@ -146,6 +152,7 @@ class TD3(object):
 		if self.sparse_critic:
 			if self.critic_pruner(end_grow, state[:,0], action[:,0], "critic"):
 				self.critic_optimizer.step()
+				self.critic_pruner.track_gradients_for_pruning()  #gradprune
 
 		# Delayed policy updates
 		if self.total_it % self.policy_freq == 0:
@@ -274,6 +281,7 @@ class TD3(object):
 			if self.sparse_actor:
 				if self.actor_pruner(end_grow):
 					self.actor_optimizer.step()
+					self.actor_pruner.track_gradients_for_pruning() #gradprune
 
 			# Update the frozen target models
 			for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):

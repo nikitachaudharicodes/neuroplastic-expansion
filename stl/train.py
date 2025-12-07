@@ -97,6 +97,10 @@ def main():
     parser.add_argument("--grad_accumulation_n", default=1, type=int)           # Number of steps to accumulate gradients, multi-step can make the evaluation more stable for complex tasks, especially for VRLs
     parser.add_argument("--use_simple_metric", action='store_true', default=False)  # Use fast dormant weight pruning, instead of ReDo-style pruning
     parser.add_argument("--complex_prune", action='store_true', default=False)  # Warning: this will make your progress run slowly. When using ReDo-style pruning, we suggest to set complex_prune to True for clean the gradient of dormant neurons following the Dormant neuron phenomenon github repo
+    
+    parser.add_argument("--grad_pruning", action='store_true', default=False)     # gradprune
+    parser.add_argument("--grad_prune_alpha", default=0.99, type=float)     # gradprune
+
     args = parser.parse_args()
     args.T_end = (args.max_timesteps - args.start_timesteps)
     the_dir = 'results' 
