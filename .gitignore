@@ -23,7 +23,8 @@ stl/runs/
 stl/videos
 .DS_Store
 stl/results_eval
-
+Neuroplastic Expansion.pdf
+plots/
 # Virtual Environment
 venv/
 env/
@@ -36,7 +37,7 @@ ENV/
 *.swo
 
 # Project specific
-results/
+
 env_export/
 *.log
 *.pth
