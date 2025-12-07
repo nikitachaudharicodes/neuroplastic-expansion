@@ -167,7 +167,11 @@ class STL_Scheduler:
         tau:float=0.0,
         init_method:str='zero',
         initial_stl_sparsity:float=0.8,
-        complex_prune:bool=False  # New parameter for target STL sparsity
+        complex_prune:bool=False,  # New parameter for target STL sparsity
+        # NEW CONSOLIDATION PARAMETERS
+        consolidation_steps: int=1000, # Number of steps to consolidate steps during consolidation 
+        consolidation_lr_scale: float=1.0, # learning rate multiplier during consolidation
+        consolidation_strategy: str='uniform' # 'uniform', 'recent', 'prioritized'
         ):
         # Initialize model and optimizer references
         self.model = model
@@ -178,6 +182,13 @@ class STL_Scheduler:
         self.uni = uni  # Uniform annealing mode
         self.reset = True
         self.random_grow = random_grow
+        # Consolidation parameters
+        self.consolidation_steps = consolidation_steps
+        self.consolidation_lr_scale = consolidation_lr_scale
+        self.consolidation_strategy = consolidation_strategy
+        self.in_consolidation = False
+        self.consolidation_counter = 0
+        self.original_lr = None
         self.use_simple_metric = use_simple_metric
         self.tau = tau
         self.init_method = init_method  # Store initialization method
@@ -586,7 +597,8 @@ class STL_Scheduler:
                 
                 mask_combined = torch.reshape(mask1 + mask2, current_mask.shape).bool()
                 current_mask.data = mask_combined
-
+            if self.consolidation_steps > 0:
+                self.start_consolidation()
         else:
             # keep dynmaic topology after the growing phase
             total_pruned_num = 0
@@ -708,17 +720,56 @@ class STL_Scheduler:
         for k, v in state_dict.items():
             setattr(self, k, v)
 
-    def _lecun_init(self, layer: Union[nn.Linear, nn.Conv2d], mask: torch.Tensor) -> None:
+    def _lecun_init(self, layer: torch.Tensor, mask: torch.Tensor) -> None:
         """Initialize weights using Lecun initialization for newly grown connections."""
-        fan_in, _ = nn.init._calculate_fan_in_and_fan_out(layer.weight)
+        fan_in, _ = nn.init._calculate_fan_in_and_fan_out(layer)
         variance = 1.0 / fan_in
         stddev = math.sqrt(variance) / 0.87962566103423978
         
         with torch.no_grad():
-            layer.weight[mask] = nn.init._no_grad_trunc_normal_(
-                layer.weight[mask], mean=0.0, std=1.0, a=-2.0, b=2.0
+            layer[mask] = nn.init._no_grad_trunc_normal_(
+                layer[mask], mean=0.0, std=1.0, a=-2.0, b=2.0
             )
-            layer.weight[mask] *= stddev
-            
-            if layer.bias is not None:
-                layer.bias.data[mask] = 0.0
+            layer[mask] *= stddev
+    
+    def start_consolidation(self):
+        """Begin consolidation phase after network expansion."""
+        self.in_consolidation = True
+        self.consolidation_counter = 0
+        
+        # Reduce learning rate during consolidation
+        if self.consolidation_lr_scale != 1.0:
+            # Store original learning rate
+            self.original_lr = []
+            for param_group in self.optimizer.param_groups:
+                self.original_lr.append(param_group['lr'])
+                param_group['lr'] *= self.consolidation_lr_scale
+            print(f"🔧 Starting consolidation: {self.consolidation_steps} steps, LR scale: {self.consolidation_lr_scale}")
+
+    def step_consolidation(self):
+        """Increment consolidation counter and check if done."""
+        if not self.in_consolidation:
+            return False
+        
+        self.consolidation_counter += 1
+        
+        if self.consolidation_counter >= self.consolidation_steps:
+            self.end_consolidation()
+            return False  # Consolidation complete
+        
+        return True  # Still in consolidation
+
+    def end_consolidation(self):
+        """End consolidation phase and restore learning rate."""
+        if not self.in_consolidation:
+            return
+        
+        self.in_consolidation = False
+        self.consolidation_counter = 0
+        
+        # Restore original learning rate
+        if self.consolidation_lr_scale != 1.0 and self.original_lr is not None:
+            for param_group, lr in zip(self.optimizer.param_groups, self.original_lr):
+                param_group['lr'] = lr
+            print(f"Consolidation complete. Learning rate restored.")
+            self.original_lr = None

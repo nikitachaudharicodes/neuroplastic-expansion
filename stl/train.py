@@ -97,6 +97,9 @@ def main():
     parser.add_argument("--grad_accumulation_n", default=1, type=int)           # Number of steps to accumulate gradients, multi-step can make the evaluation more stable for complex tasks, especially for VRLs
     parser.add_argument("--use_simple_metric", action='store_true', default=False)  # Use fast dormant weight pruning, instead of ReDo-style pruning
     parser.add_argument("--complex_prune", action='store_true', default=False)  # Warning: this will make your progress run slowly. When using ReDo-style pruning, we suggest to set complex_prune to True for clean the gradient of dormant neurons following the Dormant neuron phenomenon github repo
+    parser.add_argument("--consolidation_steps", default=1000, type=int, help="Number of gradient steps for consolidation after expansion")
+    parser.add_argument("--consolidation_lr_scale", default=1.0, type=float, help="Learning rate scale during consolidation (e.g., 0.5 for half LR)")
+    parser.add_argument("--consolidation_strategy", default='uniform', type=str, choices=['uniform', 'recent', 'prioritized'], help="Sampling strategy during consolidation")
     args = parser.parse_args()
     args.T_end = (args.max_timesteps - args.start_timesteps)
     the_dir = 'results' 
@@ -248,6 +251,12 @@ def main():
             if (t + 1) % args.eval_freq == 0:
                 writer.add_scalar('actor_FAU', ac_fau, t)
                 writer.add_scalar('critic_FAU', cr_fau, t)
+                if args.critic_sparsity > 0:
+                    writer.add_scalar('consolidation/in_consolidation', 
+                                    float(policy.critic_pruner.in_consolidation), t)
+                    if policy.critic_pruner.in_consolidation:
+                        writer.add_scalar('consolidation/step', 
+                                        policy.critic_pruner.consolidation_counter, t)
 
 
         if done: 

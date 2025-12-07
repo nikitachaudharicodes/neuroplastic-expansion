@@ -108,6 +108,27 @@ class ReplayBuffer(object):
             torch.FloatTensor(self.reset_flag[ind]).to(self.device)
         )
 
+    def sample_recent(self, batch_size, nstep=1, recent_fraction=0.5):
+        """Sample from recent experiences only (for consolidation)."""
+        recent_size = int(self.size * recent_fraction)
+        if recent_size < nstep:
+            # Fall back to normal sampling if not enough recent data
+            return self.sample(batch_size, nstep)
+        
+        # Sample only from the most recent portion of the buffer
+        recent_start = (self.ptr - recent_size) % self.max_size
+        ind = (np.random.randint(0, recent_size - nstep + 1, (batch_size, 1)) + recent_start + np.arange(nstep)) % self.max_size
+        
+        return (
+            torch.FloatTensor(self.state[ind]).to(self.device),
+            torch.FloatTensor(self.action[ind]).to(self.device),
+            torch.FloatTensor(self.next_state[ind]).to(self.device),
+            torch.FloatTensor(self.reward[ind]).to(self.device),
+            torch.FloatTensor(self.not_done[ind]).to(self.device),
+            torch.FloatTensor(self.action_mean[ind]).to(self.device),
+            torch.FloatTensor(self.reset_flag[ind]).to(self.device)
+        )
+
     @property
     def size(self):
         return (self.ptr+self.max_size-self.left_ptr)%self.max_size

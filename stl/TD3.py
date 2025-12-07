@@ -56,24 +56,35 @@ class TD3(object):
 		self.tb_interval = int(args.T_end/1000)
 
 		if self.sparse_actor: # Sparsify the actor at initialization
+			
 			self.actor_pruner = STL_Scheduler(self.actor, self.actor_optimizer, 
 											static_topo=args.static_actor, sparsity=args.actor_sparsity,
 											T_end=args.T_end, delta=args.delta, zeta=args.zeta,
 											grad_accumulation_n=args.grad_accumulation_n,
 											use_simple_metric=args.use_simple_metric,
 											initial_stl_sparsity=args.initial_stl_sparsity,
-											complex_prune=args.complex_prune)
+											complex_prune=args.complex_prune,
+											stl=args.stl_actor, uni=args.uni,
+											random_grow=args.random_grow, init_method=args.init_method,
+											consolidation_steps=args.consolidation_steps,
+											consolidation_lr_scale=args.consolidation_lr_scale,
+											consolidation_strategy=args.consolidation_strategy)
 			self.targer_actor_W, _ = get_W(self.actor_target)
 		else:
 			self.actor_pruner = lambda: True
 		if self.sparse_critic: # Sparsify the critic at initialization
 			self.critic_pruner = STL_Scheduler(self.critic, self.critic_optimizer, 
-											 static_topo=args.static_critic, sparsity=args.critic_sparsity,
-											 T_end=args.T_end, delta=args.delta, zeta=args.zeta,
-											 grad_accumulation_n=args.grad_accumulation_n,
-											 use_simple_metric=args.use_simple_metric,
-											 initial_stl_sparsity=args.initial_stl_sparsity,
-											 complex_prune=args.complex_prune)
+											static_topo=args.static_critic, sparsity=args.critic_sparsity,
+											T_end=args.T_end, delta=args.delta, zeta=args.zeta,
+											grad_accumulation_n=args.grad_accumulation_n,
+											use_simple_metric=args.use_simple_metric,
+											initial_stl_sparsity=args.initial_stl_sparsity,
+											complex_prune=args.complex_prune,
+											stl=args.stl_critic, uni=args.uni,
+											random_grow=args.random_grow, init_method=args.init_method,
+											consolidation_steps=args.consolidation_steps,
+											consolidation_lr_scale=args.consolidation_lr_scale,
+											consolidation_strategy=args.consolidation_strategy)
 			self.targer_critic_W, _ = get_W(self.critic_target)
 		else:
 			self.critic_pruner = lambda: True
@@ -98,12 +109,23 @@ class TD3(object):
 			gate = 1.0/(1.0+math.exp(self.awaken-cr_fau)*self.Tamp)
 			if gate>= 0.60:
 				gate=0.4
+		
 		if self.auto_batch and cr_fau < self.awaken_:
 			batch_size /= 2
-		if self.recall and cr_fau < self.awaken and random.uniform(0, 1) >= gate:
-			state, action, next_state, reward, not_done, _, reset_flag = replay_buffer.recall_sample(int(batch_size),current_nstep)
+
+		# NEW: Check if in consolidation mode
+		if self.sparse_critic and self.critic_pruner.in_consolidation:
+			# Use consolidation-specific sampling strategy
+			if self.critic_pruner.consolidation_strategy == 'recent':
+				state, action, next_state, reward, not_done, _, reset_flag = replay_buffer.sample_recent(int(batch_size), current_nstep, recent_fraction=0.5)
+			elif self.critic_pruner.consolidation_strategy == 'uniform':
+				state, action, next_state, reward, not_done, _, reset_flag = replay_buffer.sample(int(batch_size), current_nstep)
+			# prioritized would go here if implemented
+		elif self.recall and cr_fau < self.awaken and random.uniform(0, 1) >= gate:
+			state, action, next_state, reward, not_done, _, reset_flag = replay_buffer.recall_sample(int(batch_size), current_nstep)
 		else:
 			state, action, next_state, reward, not_done, _, reset_flag = replay_buffer.sample(int(batch_size), current_nstep)
+		
 		with torch.no_grad():
 			noise = (
 				torch.randn_like(action[:,0]) * self.policy_noise
@@ -146,6 +168,8 @@ class TD3(object):
 		if self.sparse_critic:
 			if self.critic_pruner(end_grow, state[:,0], action[:,0], "critic"):
 				self.critic_optimizer.step()
+				# NEW: Step consolidation counter if in consolidation phase
+				self.critic_pruner.step_consolidation()
 
 		# Delayed policy updates
 		if self.total_it % self.policy_freq == 0:
@@ -158,6 +182,8 @@ class TD3(object):
 			if self.sparse_actor:
 				if self.actor_pruner(end_grow, state[:,0], None, "actor"):
 					self.actor_optimizer.step()
+					# NEW: Step consolidation counter if in consolidation phase
+					self.actor_pruner.step_consolidation()
 
 			# Update the frozen target models
 			for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
@@ -180,7 +206,6 @@ class TD3(object):
 					w.data *= mask
 
 		return ac_fau,cr_fau
-	
 	def save(self, filename):
 		torch.save({
 			"actor": self.actor.state_dict(),
