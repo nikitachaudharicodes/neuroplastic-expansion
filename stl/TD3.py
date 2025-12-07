@@ -11,6 +11,22 @@ from torch.utils.tensorboard import SummaryWriter
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+
+def _copy_linear_params(dst_layer: torch.nn.Linear, src_layer: torch.nn.Linear):
+	out_features = min(dst_layer.out_features, src_layer.out_features)
+	in_features = min(dst_layer.in_features, src_layer.in_features)
+	with torch.no_grad():
+		dst_layer.weight[:out_features, :in_features].copy_(src_layer.weight[:out_features, :in_features])
+		if dst_layer.bias is not None and src_layer.bias is not None:
+			dst_layer.bias[:out_features].copy_(src_layer.bias[:out_features])
+
+
+def _copy_layernorm_params(dst_ln: torch.nn.LayerNorm, src_ln: torch.nn.LayerNorm):
+	dim = min(dst_ln.normalized_shape[0], src_ln.normalized_shape[0])
+	with torch.no_grad():
+		dst_ln.weight[:dim].copy_(src_ln.weight[:dim])
+		dst_ln.bias[:dim].copy_(src_ln.bias[:dim])
+
 class TD3(object):
 	def __init__(
 		self,
@@ -30,19 +46,25 @@ class TD3(object):
 		self.awaken_ = args.awaken * 0.9
 		self.recall = args.recall
 		self.elastic = args.elastic
+		self.state_dim = args.state_dim
+		self.action_dim = args.action_dim
+		self.actor_hidden_dim = args.hidden_dim
+		self.critic_hidden_dim = args.hidden_dim
+		self.actor_lr = 3e-4
+		self.critic_lr = 3e-4
 
 		# Neural networks
 		self.actor = MLPActor(args.state_dim, args.action_dim, args.max_action, args.hidden_dim).to(device)
 		self.actor_target = copy.deepcopy(self.actor)
 		if self.elastic:
 			self.actor_EMA = copy.deepcopy(self.actor)
-		self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=3e-4)
+		self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.actor_lr)
 
 		self.critic = MLPCritic(args.state_dim, args.action_dim, args.hidden_dim).to(device)
 		self.critic_target = copy.deepcopy(self.critic)
 		if self.elastic:
 			self.critic_EMA = copy.deepcopy(self.critic)
-		self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=3e-4)
+		self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.critic_lr)
 
 		self.sparse_actor = (args.actor_sparsity > 0)
 		self.sparse_critic = (args.critic_sparsity > 0)
@@ -77,6 +99,10 @@ class TD3(object):
 			self.targer_critic_W, _ = get_W(self.critic_target)
 		else:
 			self.critic_pruner = lambda: True
+
+		self.adaptive_expansion = getattr(args, "adaptive_expansion", False)
+		if self.adaptive_expansion:
+			self._init_adaptive(args)
 
 	def select_action(self, state) -> np.ndarray:
 		state = torch.FloatTensor(state.reshape(1, -1)).to(device)
@@ -179,7 +205,91 @@ class TD3(object):
 				for w, mask in zip(self.targer_actor_W, self.actor_pruner.backward_masks):
 					w.data *= mask
 
+		if self.adaptive_expansion:
+			self._maybe_expand(ac_fau, cr_fau)
+
 		return ac_fau,cr_fau
+	
+	def _init_adaptive(self, args):
+		self.adaptive_actor_threshold = args.adaptive_actor_threshold
+		self.adaptive_critic_threshold = args.adaptive_critic_threshold
+		self.adaptive_check_interval = args.adaptive_check_interval
+		self.adaptive_expansion_size = args.adaptive_expansion_size
+		self._last_adaptive_check = 0
+		self.actor_expansions = 0
+		self.critic_expansions = 0
+
+	def _maybe_expand(self, ac_fau: float, cr_fau: float):
+		if self.total_it < self.adaptive_check_interval:
+			return
+		if (self.total_it - self._last_adaptive_check) < self.adaptive_check_interval:
+			return
+
+		self._last_adaptive_check = self.total_it
+		actor_expanded = False
+		critic_expanded = False
+
+		if ac_fau < self.adaptive_actor_threshold:
+			self._expand_actor()
+			actor_expanded = True
+			self.actor_expansions += 1
+		if cr_fau < self.adaptive_critic_threshold:
+			self._expand_critic()
+			critic_expanded = True
+			self.critic_expansions += 1
+
+		if self.writer is not None:
+			self.writer.add_scalar('adaptive/actor_fau', ac_fau, self.total_it)
+			self.writer.add_scalar('adaptive/critic_fau', cr_fau, self.total_it)
+			if actor_expanded:
+				self.writer.add_scalar('adaptive/actor_hidden_dim', self.actor_hidden_dim, self.total_it)
+				self.writer.add_scalar('adaptive/actor_expansions', self.actor_expansions, self.total_it)
+			if critic_expanded:
+				self.writer.add_scalar('adaptive/critic_hidden_dim', self.critic_hidden_dim, self.total_it)
+				self.writer.add_scalar('adaptive/critic_expansions', self.critic_expansions, self.total_it)
+
+		if actor_expanded or critic_expanded:
+			print(f"[Adaptive] Actor expanded={actor_expanded} Critic expanded={critic_expanded} at step {self.total_it}")
+
+	def _expand_actor(self):
+		new_hidden = self.actor_hidden_dim + self.adaptive_expansion_size
+		new_actor = MLPActor(self.state_dim, self.action_dim, self.max_action, new_hidden).to(device)
+		self._copy_actor_weights(self.actor, new_actor)
+		self.actor = new_actor
+		self.actor_hidden_dim = new_hidden
+		self.actor_target = copy.deepcopy(self.actor)
+		if self.elastic:
+			self.actor_EMA = copy.deepcopy(self.actor)
+		self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.actor_lr)
+
+	def _expand_critic(self):
+		new_hidden = self.critic_hidden_dim + self.adaptive_expansion_size
+		new_critic = MLPCritic(self.state_dim, self.action_dim, new_hidden).to(device)
+		self._copy_critic_weights(self.critic, new_critic)
+		self.critic = new_critic
+		self.critic_hidden_dim = new_hidden
+		self.critic_target = copy.deepcopy(self.critic)
+		if self.elastic:
+			self.critic_EMA = copy.deepcopy(self.critic)
+		self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.critic_lr)
+
+	def _copy_actor_weights(self, src_actor: MLPActor, dst_actor: MLPActor):
+		_copy_linear_params(dst_actor.l1, src_actor.l1)
+		_copy_linear_params(dst_actor.l2, src_actor.l2)
+		_copy_linear_params(dst_actor.l3, src_actor.l3)
+
+	def _copy_critic_weights(self, src_critic: MLPCritic, dst_critic: MLPCritic):
+		_copy_linear_params(dst_critic.l, src_critic.l)
+		_copy_linear_params(dst_critic.l1, src_critic.l1)
+		_copy_linear_params(dst_critic.l2[0], src_critic.l2[0])
+		_copy_layernorm_params(dst_critic.l2[1], src_critic.l2[1])
+		_copy_linear_params(dst_critic.l3, src_critic.l3)
+
+		_copy_linear_params(dst_critic.l4, src_critic.l4)
+		_copy_linear_params(dst_critic.l5, src_critic.l5)
+		_copy_linear_params(dst_critic.l6[0], src_critic.l6[0])
+		_copy_layernorm_params(dst_critic.l6[1], src_critic.l6[1])
+		_copy_linear_params(dst_critic.l7, src_critic.l7)
 	
 	def save(self, filename):
 		torch.save({
@@ -288,6 +398,8 @@ class TD3(object):
 			if self.sparse_actor:
 				for w, mask in zip(self.targer_actor_W, self.actor_pruner.backward_masks):
 					w.data *= mask
+		if self.adaptive_expansion:
+			self._maybe_expand(ac_fau, cr_fau)
 		return ac_fau, cr_fau
 		
 

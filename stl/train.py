@@ -1,7 +1,11 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import sys
-sys.path.append(r'../')
+from pathlib import Path
+CURRENT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = CURRENT_DIR.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
 import numpy as np
 import torch
 # import gym
@@ -97,7 +101,21 @@ def main():
     parser.add_argument("--grad_accumulation_n", default=1, type=int)           # Number of steps to accumulate gradients, multi-step can make the evaluation more stable for complex tasks, especially for VRLs
     parser.add_argument("--use_simple_metric", action='store_true', default=False)  # Use fast dormant weight pruning, instead of ReDo-style pruning
     parser.add_argument("--complex_prune", action='store_true', default=False)  # Warning: this will make your progress run slowly. When using ReDo-style pruning, we suggest to set complex_prune to True for clean the gradient of dormant neurons following the Dormant neuron phenomenon github repo
+    parser.add_argument("--adaptive_expansion", action='store_true', default=False, help="Enable adaptive neuron expansion for TD3")
+    parser.add_argument("--adaptive_actor_threshold", default=0.2, type=float, help="FAU threshold for triggering actor expansion")
+    parser.add_argument("--adaptive_critic_threshold", default=0.3, type=float, help="FAU threshold for triggering critic expansion")
+    parser.add_argument("--adaptive_check_interval", default=5000, type=int, help="How many gradient steps between adaptive expansion checks")
+    parser.add_argument("--adaptive_expansion_size", default=8, type=int, help="Number of neurons to add to each hidden layer when expanding")
+    parser.add_argument("--adaptive_max_timesteps", default=int(1e5), type=int, help="Default max timesteps when adaptive expansion is enabled")
     args = parser.parse_args()
+    if args.adaptive_expansion:
+        if args.actor_sparsity > 0 or args.critic_sparsity > 0:
+            print("Adaptive expansion requires dense actors/critics; overriding sparsity targets to 0.")
+            args.actor_sparsity = 0
+            args.critic_sparsity = 0
+        if args.max_timesteps > args.adaptive_max_timesteps:
+            print(f"Adaptive expansion enabled: setting max_timesteps to {args.adaptive_max_timesteps}")
+            args.max_timesteps = args.adaptive_max_timesteps
     args.T_end = (args.max_timesteps - args.start_timesteps)
     the_dir = 'results' 
     root_dir = './'+the_dir+'/'+args.exp_id+'_'+args.env
@@ -297,4 +315,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
