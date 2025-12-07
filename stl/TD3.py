@@ -178,7 +178,20 @@ class TD3(object):
 			if self.sparse_actor:
 				for w, mask in zip(self.targer_actor_W, self.actor_pruner.backward_masks):
 					w.data *= mask
+
 		return ac_fau,cr_fau
+	
+	def save(self, filename):
+		torch.save({
+			"actor": self.actor.state_dict(),
+			"critic": self.critic.state_dict(),
+		}, filename)
+
+	def load(self, filename):
+		checkpoint = torch.load(filename, map_location=device)
+		self.actor.load_state_dict(checkpoint["actor"])
+		self.critic.load_state_dict(checkpoint["critic"])
+
 
 	def train_rej(self, replay_buffer: ReplayBuffer, batch_size=256):
 		self.total_it += 1
