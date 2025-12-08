@@ -110,7 +110,11 @@ class SAC(object):
 				grad_accumulation_n=args.grad_accumulation_n,
 				use_simple_metric=args.use_simple_metric,
 				initial_stl_sparsity=args.initial_stl_sparsity,
-				complex_prune=args.complex_prune)
+				complex_prune=args.complex_prune,
+				stl=True, uni=True, random_grow=False, init_method='lecun',
+				consolidation_steps=args.consolidation_steps,
+				consolidation_lr_scale=args.consolidation_lr_scale,
+				consolidation_strategy=args.consolidation_strategy)
 			self.target_actor_W, _ = get_W(self.actor)
 		else:
 			self.actor_pruner = lambda *args, **kwargs: True
@@ -122,7 +126,11 @@ class SAC(object):
 				grad_accumulation_n=args.grad_accumulation_n,
 				use_simple_metric=args.use_simple_metric,
 				initial_stl_sparsity=args.initial_stl_sparsity,
-				complex_prune=args.complex_prune)
+				complex_prune=args.complex_prune,
+				stl=True, uni=True, random_grow=False, init_method='lecun',
+				consolidation_steps=args.consolidation_steps,
+				consolidation_lr_scale=args.consolidation_lr_scale,
+				consolidation_strategy=args.consolidation_strategy)
 			self.target_critic_W, _ = get_W(self.critic_target)
 		else:
 			self.critic_pruner = lambda *args, **kwargs: True
@@ -165,7 +173,14 @@ class SAC(object):
 				gate = 0.4
 		if self.auto_batch and cr_fau < self.awaken_:
 			current_batch = max(32, int(current_batch / 2))
-		if self.recall and cr_fau < self.awaken and random.uniform(0, 1) >= gate:
+		
+		# Check if in consolidation mode
+		if self.sparse_critic and self.critic_pruner.in_consolidation:
+			if self.critic_pruner.consolidation_strategy == 'recent':
+				state, action, next_state, reward, not_done, _, reset_flag = replay_buffer.sample_recent(int(current_batch), current_nstep, recent_fraction=0.5)
+			elif self.critic_pruner.consolidation_strategy == 'uniform':
+				state, action, next_state, reward, not_done, _, reset_flag = replay_buffer.sample(int(current_batch), current_nstep)
+		elif self.recall and cr_fau < self.awaken and random.uniform(0, 1) >= gate:
 			state, action, next_state, reward, not_done, _, reset_flag = replay_buffer.recall_sample(int(current_batch), current_nstep)
 		elif current_batch != batch_size:
 			state, action, next_state, reward, not_done, _, reset_flag = replay_buffer.sample(int(current_batch), current_nstep)
@@ -209,6 +224,7 @@ class SAC(object):
 		if self.sparse_critic:
 			if self.critic_pruner(end_grow, state0, action0, "critic"):
 				self.critic_optimizer.step()
+				self.critic_pruner.step_consolidation()
 		else:
 			self.critic_optimizer.step()
 
@@ -223,6 +239,7 @@ class SAC(object):
 		if self.sparse_actor:
 			if self.actor_pruner(end_grow, state0, None, "actor"):
 				self.actor_optimizer.step()
+				self.actor_pruner.step_consolidation()
 		else:
 			self.actor_optimizer.step()
 

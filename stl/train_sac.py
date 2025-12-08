@@ -72,6 +72,14 @@ def main():
 	parser.add_argument("--use_dynamic_buffer", action='store_true', default=False)
 	parser.add_argument("--buffer_threshold", default=0.2, type=float)
 	parser.add_argument("--buffer_adjustment_interval", default=int(1e4), type=int)
+	parser.add_argument("--stl_actor", action='store_true', default=False)
+	parser.add_argument("--stl_critic", action='store_true', default=False)
+	parser.add_argument("--uni", action='store_true', default=False)
+	parser.add_argument("--random_grow", action='store_true', default=False)
+	parser.add_argument("--init_method", default='lecun', type=str, choices=['zero', 'lecun'])
+	parser.add_argument("--consolidation_steps", default=1000, type=int, help="Number of gradient steps for consolidation after expansion")
+	parser.add_argument("--consolidation_lr_scale", default=1.0, type=float, help="Learning rate scale during consolidation")
+	parser.add_argument("--consolidation_strategy", default='uniform', type=str, choices=['uniform', 'recent'], help="Sampling strategy during consolidation")
 	args = parser.parse_args()
 
 	args.T_end = (args.max_timesteps - args.start_timesteps)
@@ -189,6 +197,10 @@ def main():
 			writer.add_scalar('actor_FAU', last_ac_fau, t+1)
 			writer.add_scalar('critic_FAU', last_cr_fau, t+1)
 			writer.add_scalar('reward', eval_reward, t+1)
+			if args.critic_sparsity > 0:
+				writer.add_scalar('consolidation/in_consolidation', float(policy.critic_pruner.in_consolidation), t+1)
+				if policy.critic_pruner.in_consolidation:
+					writer.add_scalar('consolidation/step', policy.critic_pruner.consolidation_counter, t+1)
 			if args.actor_sparsity > 0:
 				writer.add_scalar('actor_sparsity', show_sparsity(policy.actor.state_dict(), to_print=False), t+1)
 			if args.critic_sparsity > 0:
