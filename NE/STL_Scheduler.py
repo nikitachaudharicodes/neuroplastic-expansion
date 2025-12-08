@@ -637,7 +637,10 @@ class STL_Scheduler:
                 current_mask = self.backward_masks[l]
 
                 # Calculate importance scores for pruning and growing
-                score_drop = torch.abs(w)
+                if self.use_grad_pruning and l in self.grad_accumulator:
+                    score_drop = self.grad_accumulator[l]
+                else:
+                    score_drop = torch.abs(w)
                 if not self.random_grow:
                     score_grow = torch.abs(self.backward_hook_objects[l].dense_grad)
                 else:
